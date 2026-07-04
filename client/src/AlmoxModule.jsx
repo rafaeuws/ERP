@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { almox } from "./api.js";
+import { CSS } from "./App.jsx";
 import * as XLSX from "xlsx";
 
 /* ============================================================
@@ -998,6 +999,7 @@ export default function AlmoxModule({ user, hotel, onExit, onLogout, openHelp, i
 
   return (
     <div className="app">
+      <style>{CSS}</style>
       <header className="hdr no-print">
         <div className="hdr-in">
           <div className="hdr-top">

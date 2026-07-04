@@ -1464,7 +1464,7 @@ export default function App() {
 }
 
 /* ============ ESTILO ============ */
-const CSS = `
+export const CSS = `
 :root{--paper:#f3f5f1;--card:#ffffff;--ink:#1c2b2d;--dim:#5c6b66;--line:#dfe4dd;--green:#0e7c66;--green-d:#0a5d4d;--amber:#dc9a2e;--amber-bg:#fbf1dd;--red:#be4b3f;--red-bg:#f9e7e4;--green-bg:#e4f1ec;}
 *{box-sizing:border-box}
 .app{min-height:100vh;background:var(--paper);color:var(--ink);font:14px/1.45 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif;padding-bottom:120px}
