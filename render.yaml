@@ -1,0 +1,30 @@
+# Deploy no Render.com com banco PostgreSQL persistente (recomendado).
+# Importante: o banco de dados Postgres PERSISTE os dados entre deploys e reinícios.
+databases:
+  - name: par-stock-db
+    plan: free            # banco PostgreSQL gerenciado
+    databaseName: parstock
+    user: parstock
+
+services:
+  - type: web
+    name: stock-suite
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL          # conecta automaticamente ao Postgres acima
+        fromDatabase:
+          name: par-stock-db
+          property: connectionString
+      - key: JWT_SECRET            # gerado e fixo — mantém as sessões após reiniciar
+        generateValue: true
+      - key: SEED_ADMIN_LOGIN
+        value: admin
+      - key: SEED_ADMIN_PASSWORD
+        value: rafa1411
+      - key: TOKEN_TTL
+        value: 12h
