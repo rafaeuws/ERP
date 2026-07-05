@@ -89,8 +89,8 @@ r.post("/:pid/day/:date/validate", pdvGuard, async (req, res, next) => {
 r.get("/:pid/erp-itens", pdvGuard, async (req, res, next) => {
   try {
     const pdv = await db.get("SELECT hotel_id FROM pdvs WHERE id = ?", [req.pdvId]);
-    const itens = await db.all("SELECT id, codigo, descricao, unidade, estoque_atual, ativo FROM almox_itens WHERE hotel_id = ? ORDER BY descricao", [pdv.hotel_id]);
-    res.json(itens.filter((i) => Number(i.ativo)).map((i) => ({ id: i.id, codigo: i.codigo, descricao: i.descricao, unidade: i.unidade, estoqueAtual: Number(i.estoque_atual) })));
+    const itens = await db.all("SELECT id, codigo, descricao, unidade, estoque_atual, estoque_minimo, custo_medio, ativo FROM almox_itens WHERE hotel_id = ? ORDER BY descricao", [pdv.hotel_id]);
+    res.json(itens.filter((i) => Number(i.ativo)).map((i) => ({ id: i.id, codigo: i.codigo, descricao: i.descricao, unidade: i.unidade, estoqueAtual: Number(i.estoque_atual), estoqueMinimo: Number(i.estoque_minimo), custoMedio: Number(i.custo_medio) })));
   } catch (e) { next(e); }
 });
 

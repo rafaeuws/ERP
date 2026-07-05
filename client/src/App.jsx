@@ -953,6 +953,31 @@ function Produtos({ products, saveProducts, pdvId }) {
   const [q, setQ] = useState("");
   const [nv, setNv] = useState({ name: "", unit: "UN", par: "", price: "" });
   const [importing, setImporting] = useState(false);
+  const [impErp, setImpErp] = useState(false);   // tela de importar do almoxarifado
+  const [sel, setSel] = useState({});            // { itemId: true }
+  const [impQ, setImpQ] = useState("");
+  const linkedIds = useMemo(() => new Set(products.map((p) => p.itemId).filter(Boolean)), [products]);
+
+  const abrirImportAlmox = () => { setSel({}); setImpQ(""); setImpErp(true); };
+  const toggleSel = (id) => setSel((s) => ({ ...s, [id]: !s[id] }));
+  const erpDisponiveis = erp.filter((i) => !linkedIds.has(i.id));
+  const erpFiltrados = (impErp ? erp : []).filter((i) => !impQ || (i.descricao + " " + i.codigo).toLowerCase().includes(impQ.toLowerCase()));
+  const selCount = Object.values(sel).filter(Boolean).length;
+  const marcarTodos = () => { const all = {}; erpFiltrados.forEach((i) => { if (!linkedIds.has(i.id)) all[i.id] = true; }); setSel(all); };
+  const limparSel = () => setSel({});
+  const confirmarImportAlmox = () => {
+    const escolhidos = erp.filter((i) => sel[i.id] && !linkedIds.has(i.id));
+    if (!escolhidos.length) { setImpErp(false); return; }
+    const novos = escolhidos.map((i) => ({
+      id: uid(), name: i.descricao, unit: i.unidade || "UN",
+      par: Math.max(0, Math.round(Number(i.estoqueMinimo) || 0)),
+      price: Math.max(0, Number(i.custoMedio) || 0),
+      itemId: i.id,
+    }));
+    saveProducts([...products, ...novos]);
+    setImpErp(false);
+    alert(escolhidos.length + " produto(s) importado(s) do almoxarifado e já vinculado(s).");
+  };
   const list = products.filter((p) => p.name.toLowerCase().includes(q.toLowerCase()));
   const up = (id, f, v) => saveProducts(products.map((p) => (p.id === id ? { ...p, [f]: f === "par" || f === "price" ? num(v) : v } : p)));
   const del = (id) => { const p = products.find((x) => x.id === id); if (window.confirm('Excluir "' + p.name + '"? O histórico de dias já salvos não é alterado.')) saveProducts(products.filter((x) => x.id !== id)); };
@@ -1031,6 +1056,16 @@ function Produtos({ products, saveProducts, pdvId }) {
           <button className="primary self-end" onClick={add}>Adicionar</button>
         </div>
       </div>
+      {erp.length > 0 && (
+        <div className="card">
+          <div className="card-t">Importar do almoxarifado</div>
+          <p className="hint" style={{ margin: "0 0 10px" }}>Escolha itens já cadastrados no <b>almoxarifado</b> deste hotel para trazer como produtos deste PDV. Eles entram <b>já vinculados</b> ao item do almoxarifado, então a reposição pode ser enviada automaticamente. O estoque mínimo e o valor vêm como sugestão e podem ser ajustados depois.</p>
+          <div className="row wrap gap">
+            <button className="primary self-end" onClick={abrirImportAlmox}>Escolher do almoxarifado</button>
+            <span className="hint self-end">{erpDisponiveis.length} item(ns) disponível(is){erp.length - erpDisponiveis.length > 0 ? ` · ${erp.length - erpDisponiveis.length} já vinculado(s)` : ""}</span>
+          </div>
+        </div>
+      )}
       <div className="card">
         <div className="card-t">Importar do Excel</div>
         <p className="hint" style={{ margin: "0 0 10px" }}>Envie uma planilha com <b>coluna A = produto</b>, <b>coluna B = estoque mínimo</b>, <b>coluna C = valor (R$)</b> e <b>coluna D = unidade</b> (opcional; ex.: UN, GF, LA). Produtos com nome já existente são atualizados; os novos são adicionados.</p>
@@ -1066,6 +1101,56 @@ function Produtos({ products, saveProducts, pdvId }) {
         </table>
       </div>
       <p className="hint">{products.length} produtos cadastrados. Alterações aqui valem para os próximos lançamentos. O <b>Valor (R$)</b> é usado para calcular o custo das perdas no dashboard.{erp.length > 0 && <> O <b>vínculo</b> conecta o produto ao item do almoxarifado para o envio automático da reposição.</>}</p>
+
+      {impErp && (
+        <div className="modal-ov" onClick={() => setImpErp(false)}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-x" onClick={() => setImpErp(false)} aria-label="fechar">×</button>
+            <h3>Importar do almoxarifado</h3>
+            <div className="modal-body">
+              <div className="row between wrap gap" style={{ marginBottom: 10 }}>
+                <label className="fld grow" style={{ maxWidth: 340 }}>Buscar item<input className="tinp full" value={impQ} autoFocus placeholder="código ou descrição…" onChange={(e) => setImpQ(e.target.value)} /></label>
+                <span className="row gap self-end">
+                  <button className="ghost" onClick={marcarTodos}>Marcar todos</button>
+                  <button className="ghost" onClick={limparSel}>Limpar</button>
+                </span>
+              </div>
+              {erp.length === 0 ? (
+                <div className="empty">O almoxarifado deste hotel ainda não tem itens cadastrados.</div>
+              ) : (
+                <div className="scrollx" style={{ maxHeight: "52vh", overflow: "auto" }}>
+                  <table className="tbl">
+                    <thead><tr><th style={{ width: 34 }} /><th className="tl">Código</th><th className="tl">Descrição</th><th>Un.</th><th>Estoque mín.</th><th>Custo méd.</th></tr></thead>
+                    <tbody>
+                      {erpFiltrados.map((i) => {
+                        const already = linkedIds.has(i.id);
+                        return (
+                          <tr key={i.id} style={already ? { opacity: 0.55 } : { cursor: "pointer" }} onClick={() => !already && toggleSel(i.id)}>
+                            <td>{already ? <span className="sbadge dim" title="já vinculado a um produto deste PDV">✓</span> : <input type="checkbox" checked={!!sel[i.id]} onChange={() => toggleSel(i.id)} onClick={(e) => e.stopPropagation()} />}</td>
+                            <td className="tl mono" style={{ fontSize: 12 }}>{i.codigo}</td>
+                            <td className="tl">{i.descricao}{already && <span className="sbadge dim" style={{ marginLeft: 6 }}>já no PDV</span>}</td>
+                            <td className="dim">{i.unidade}</td>
+                            <td><Num v={i.estoqueMinimo} /></td>
+                            <td className="dim">{fmtBRL(i.custoMedio)}</td>
+                          </tr>
+                        );
+                      })}
+                      {erpFiltrados.length === 0 && <tr><td colSpan="6" className="empty">Nenhum item encontrado para "{impQ}".</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div className="row gap" style={{ marginTop: 14, justifyContent: "space-between", flexWrap: "wrap" }}>
+              <span className="dim" style={{ fontSize: 12 }}>{selCount} item(ns) selecionado(s) para importar</span>
+              <span className="row gap">
+                <button className="ghost" onClick={() => setImpErp(false)}>Cancelar</button>
+                <button className="primary" disabled={selCount === 0} onClick={confirmarImportAlmox}>Importar {selCount > 0 ? "(" + selCount + ")" : ""}</button>
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
