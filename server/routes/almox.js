@@ -19,8 +19,8 @@ async function hotelGuard(req, res, next) {
     next();
   } catch (e) { next(e); }
 }
-const needStock = (req, res, next) => canStock(req.user.role) ? next() : res.status(403).json({ error: "Apenas Almoxarifado ou Administrador podem fazer isto." });
-const needApprove = (req, res, next) => canApprove(req.user.role) ? next() : res.status(403).json({ error: "Apenas Almoxarifado ou Administrador podem aprovar/rejeitar." });
+const needStock = (req, res, next) => canStock(req.user) ? next() : res.status(403).json({ error: "Apenas Almoxarifado ou Administrador podem fazer isto." });
+const needApprove = (req, res, next) => canApprove(req.user) ? next() : res.status(403).json({ error: "Apenas Almoxarifado ou Administrador podem aprovar/rejeitar." });
 
 /* ============ helpers de domínio ============ */
 async function nextNumero(hotelId, field, prefix) {

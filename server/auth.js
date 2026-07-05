@@ -10,7 +10,7 @@ const EXPIRES = process.env.TOKEN_TTL || "12h";
 
 export const hashPassword = (plain) => bcrypt.hashSync(plain, 10);
 export const checkPassword = (plain, hash) => bcrypt.compareSync(plain, hash);
-export const signToken = (user) => jwt.sign({ id: user.id, role: user.role }, SECRET, { expiresIn: EXPIRES });
+export const signToken = (user) => jwt.sign({ id: user.id, role: user.role, roles: user.roles || (user.role ? [user.role] : []) }, SECRET, { expiresIn: EXPIRES });
 
 export function authRequired(req, res, next) {
   const header = req.headers.authorization || "";
@@ -26,6 +26,7 @@ export function authRequired(req, res, next) {
 }
 
 export const requireRole = (...roles) => (req, res, next) => {
-  if (!req.auth || !roles.includes(req.auth.role)) return res.status(403).json({ error: "Permissão insuficiente." });
+  const mine = (req.auth && (req.auth.roles || (req.auth.role ? [req.auth.role] : []))) || [];
+  if (!mine.some((r) => roles.includes(r))) return res.status(403).json({ error: "Permissão insuficiente." });
   next();
 };

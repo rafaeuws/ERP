@@ -56,12 +56,12 @@ r.get("/:pid/day/:date", pdvGuard, async (req, res, next) => {
 r.put("/:pid/day/:date", pdvGuard, async (req, res, next) => {
   try {
     const date = req.params.date, user = req.user;
-    if (!canEditRetroactive(user.role) && date < todayISO()) return res.status(403).json({ error: "Seu perfil não pode alterar dias anteriores a hoje." });
+    if (!canEditRetroactive(user) && date < todayISO()) return res.status(403).json({ error: "Seu perfil não pode alterar dias anteriores a hoje." });
     const payload = req.body || {};
     const data = { time: payload.time || "", resp: payload.resp || "", items: payload.items || {} };
     const stamp = JSON.stringify({ id: user.id, name: user.name, role: user.role });
     const now = nowISO();
-    const supervisor = user.role === "supervisor";
+    const supervisor = !canValidate(user); // quem não pode validar envia para validação
     const status = supervisor ? "pending" : "validated";
     await db.run(`INSERT INTO days (pdv_id, date, data, status, saved_by, saved_at, validated_by, validated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -74,7 +74,7 @@ r.put("/:pid/day/:date", pdvGuard, async (req, res, next) => {
 
 r.post("/:pid/day/:date/validate", pdvGuard, async (req, res, next) => {
   try {
-    if (!canValidate(req.user.role)) return res.status(403).json({ error: "Apenas gerente ou administrador podem validar." });
+    if (!canValidate(req.user)) return res.status(403).json({ error: "Apenas gerente ou administrador podem validar." });
     const row = await db.get("SELECT * FROM days WHERE pdv_id = ? AND date = ?", [req.pdvId, req.params.date]);
     if (!row) return res.status(404).json({ error: "Dia não encontrado." });
     const stamp = JSON.stringify({ id: req.user.id, name: req.user.name, role: req.user.role });
@@ -188,7 +188,7 @@ r.get("/:pid/export", pdvGuard, async (req, res, next) => {
 
 r.post("/:pid/import", pdvGuard, async (req, res, next) => {
   try {
-    if (!canValidate(req.user.role)) return res.status(403).json({ error: "Apenas gerente ou administrador podem importar." });
+    if (!canValidate(req.user)) return res.status(403).json({ error: "Apenas gerente ou administrador podem importar." });
     const d = req.body || {};
     if (d._type !== "parstock-pdv-backup") return res.status(400).json({ error: "Arquivo de backup inválido." });
     await db.tx(async () => {

@@ -96,15 +96,19 @@ const SEED = [];
 
 /* ============ PAPÉIS / PERMISSÕES ============ */
 const ROLES = { admin: "Administrador", gerente: "Gerente", supervisor: "Supervisor de A&B", almoxarifado: "Almoxarifado", atendente: "Atendente" };
-const hasLoja = (u) => !!u && ["admin", "gerente", "supervisor"].includes(u.role);
-const hasAlmox = (u) => !!u && ["admin", "almoxarifado", "atendente"].includes(u.role);
+const rolesOf = (u) => !u ? [] : (Array.isArray(u.roles) && u.roles.length ? u.roles : (u.role ? [u.role] : []));
+const anyRole = (u, allowed) => rolesOf(u).some((r) => allowed.includes(r));
+const isAdmin = (u) => rolesOf(u).includes("admin");
+const hasLoja = (u) => anyRole(u, ["admin", "gerente", "supervisor"]);
+const hasAlmox = (u) => anyRole(u, ["admin", "almoxarifado", "atendente"]);
 const roleLabel = (r) => ROLES[r] || r;
+const rolesLabel = (u) => { const rs = rolesOf(u); return rs.length ? rs.map((r) => ROLES[r] || r).join(" · ") : "—"; };
 const can = {
-  manageUsers: (u) => u && u.role === "admin",
-  manageHotels: (u) => u && u.role === "admin",
-  managePdvs: (u) => u && (u.role === "admin" || u.role === "gerente"),
-  validate: (u) => u && (u.role === "admin" || u.role === "gerente"),
-  editRetroactive: (u) => u && (u.role === "admin" || u.role === "gerente"),
+  manageUsers: (u) => isAdmin(u),
+  manageHotels: (u) => isAdmin(u),
+  managePdvs: (u) => anyRole(u, ["admin", "gerente"]),
+  validate: (u) => anyRole(u, ["admin", "gerente"]),
+  editRetroactive: (u) => anyRole(u, ["admin", "gerente"]),
 };
 // dias que o usuário pode editar: supervisor só hoje em diante; demais qualquer dia
 const canEditDay = (u, date) => {
@@ -112,7 +116,7 @@ const canEditDay = (u, date) => {
   if (can.editRetroactive(u)) return true;
   return date >= todayISO();
 };
-const hotelsForUser = (u, hotels) => (!u ? [] : u.role === "admin" ? hotels : hotels.filter((h) => (u.hotelIds || []).includes(h.id)));
+const hotelsForUser = (u, hotels) => (!u ? [] : isAdmin(u) ? hotels : hotels.filter((h) => (u.hotelIds || []).includes(h.id)));
 
 /* ============ UTILIDADES ============ */
 const todayISO = () => new Date().toLocaleDateString("en-CA");
@@ -357,7 +361,7 @@ function Workspace({ user, pdv, hotelName, onExit, openHelp, onLogout, initial, 
         <button className="helpbtn" onClick={openHelp} title="Dúvidas e suporte">?</button>
         <div className="user-chip">
           <div className="avatar">{inits(user.name)}</div>
-          <div className="uc-txt"><div className="uname">{user.name}</div><div className="urole">{roleLabel(user.role)}</div></div>
+          <div className="uc-txt"><div className="uname">{user.name}</div><div className="urole">{rolesLabel(user)}</div></div>
           <button className="uc-btn" onClick={onExit} title="Trocar PDV" aria-label="Trocar PDV">⇄</button>
           <button className="uc-btn" onClick={onLogout} title="Sair" aria-label="Sair">⏻</button>
         </div>
@@ -366,7 +370,7 @@ function Workspace({ user, pdv, hotelName, onExit, openHelp, onLogout, initial, 
       <main className="content">
         {!storageOk && <div className="warn no-print">Não foi possível conectar ao servidor. Verifique sua conexão e recarregue a página.</div>}
         {ro && ["count", "conc", "rep"].includes(tab) && (
-          <div className="robar no-print">Você está vendo <b>{fmtBR(workDate)}</b> (dia retroativo). Seu perfil ({roleLabel(user.role)}) não pode alterar dias anteriores — selecione o dia de hoje para lançar.</div>
+          <div className="robar no-print">Você está vendo <b>{fmtBR(workDate)}</b> (dia retroativo). Seu perfil ({rolesLabel(user)}) não pode alterar dias anteriores — selecione o dia de hoje para lançar.</div>
         )}
         <Boundary tabKey={tab}>
         {products.length === 0 && !["prod", "backup"].includes(tab) && (
@@ -1068,7 +1072,7 @@ function Produtos({ products, saveProducts, pdvId }) {
 
 /* ============ BACKUP ============ */
 function BackupTab({ pdv, hotelName, user, flash, reload }) {
-  const allowImport = user.role === "admin" || user.role === "gerente";
+  const allowImport = anyRole(user, ["admin", "gerente"]);
   const doExport = async () => {
     try {
       const dump = await api.exportPdv(pdv.id);
@@ -1159,7 +1163,7 @@ function Shell({ children, user, onLogout, openHelp, crumbs, bell }) {
           </div>
           <div className="hdr-actions">
             {user && bell}
-            {user && <div className="who dark"><span className="who-n">{user.name}</span><span className="who-r">{roleLabel(user.role)}</span></div>}
+            {user && <div className="who dark"><span className="who-n">{user.name}</span><span className="who-r">{rolesLabel(user)}</span></div>}
             {user && <button className="switchbtn dark" onClick={onLogout}>Sair</button>}
             <ThemeToggle />
             <button className="helpbtn green" onClick={openHelp} title="Dúvidas e suporte">?</button>
@@ -1223,12 +1227,22 @@ function ChangePassword({ user, forced, onDone, onLogout }) {
   );
 }
 
+const PERFIS = [
+  ["supervisor", "Supervisor de A&B", "loja: lança contagem e conciliação"],
+  ["gerente", "Gerente", "loja: valida conciliações e cria PDVs"],
+  ["atendente", "Atendente", "almoxarifado: cria requisições"],
+  ["almoxarifado", "Almoxarifado", "almoxarifado: aprova requisições e movimenta estoque"],
+  ["admin", "Administrador", "acesso total ao sistema"],
+];
 function UserForm({ hotels, initial, onSave, onCancel }) {
-  const [f, setF] = useState(initial || { name: "", login: "", pass: "", role: "supervisor", hotelIds: [] });
+  const initRoles = initial ? (Array.isArray(initial.roles) && initial.roles.length ? initial.roles : (initial.role ? [initial.role] : [])) : ["supervisor"];
+  const [f, setF] = useState({ name: initial?.name || "", login: initial?.login || "", pass: "", roles: initRoles, hotelIds: initial?.hotelIds || [] });
   const [busy, setBusy] = useState(false);
   const toggleHotel = (id) => setF((p) => ({ ...p, hotelIds: p.hotelIds.includes(id) ? p.hotelIds.filter((x) => x !== id) : [...p.hotelIds, id] }));
+  const toggleRole = (id) => setF((p) => ({ ...p, roles: p.roles.includes(id) ? p.roles.filter((x) => x !== id) : [...p.roles, id] }));
   const editing = !!initial;
-  const ok = f.name.trim() && f.login.trim() && (editing || f.pass.length >= 4) && (f.role === "admin" || f.hotelIds.length > 0);
+  const adminSel = f.roles.includes("admin");
+  const ok = f.name.trim() && f.login.trim() && f.roles.length > 0 && (editing || f.pass.length >= 4) && (adminSel || f.hotelIds.length > 0);
   const save = async () => { setBusy(true); await onSave(f); setBusy(false); };
   return (
     <div className="card">
@@ -1236,12 +1250,20 @@ function UserForm({ hotels, initial, onSave, onCancel }) {
       <div className="row wrap gap">
         <label className="fld grow">Nome<input className="tinp full" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
         <label className="fld grow">Login<input className="tinp full" value={f.login} onChange={(e) => setF({ ...f, login: e.target.value.trim() })} /></label>
-        <label className="fld">Perfil<select className="tinp" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
-          <option value="supervisor">Supervisor de A&amp;B (loja)</option><option value="gerente">Gerente (loja)</option><option value="atendente">Atendente (almoxarifado)</option><option value="almoxarifado">Almoxarifado (aprova requisições)</option><option value="admin">Administrador (tudo)</option>
-        </select></label>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <div className="card-t" style={{ marginBottom: 6 }}>Permissões (pode escolher mais de uma)</div>
+        <div className="chips">
+          {PERFIS.map(([id, nome, desc]) => (
+            <button key={id} className={"chip" + (f.roles.includes(id) ? " on" : "")} onClick={() => toggleRole(id)} title={desc}>
+              {f.roles.includes(id) ? "✓ " : ""}{nome}
+            </button>
+          ))}
+        </div>
+        <p className="hint" style={{ marginTop: 6 }}>{adminSel ? "Administrador já cobre tudo — as demais permissões são ignoradas." : f.roles.length ? "Selecionadas: " + f.roles.map((r) => (ROLES[r] || r)).join(" · ") : "Escolha ao menos uma permissão."}</p>
       </div>
       <label className="fld block" style={{ marginTop: 8 }}>{editing ? "Nova senha (em branco mantém; preenchida força nova troca)" : "Senha provisória (o usuário troca no 1º acesso)"}<input className="tinp full" type="password" value={f.pass} onChange={(e) => setF({ ...f, pass: e.target.value })} /></label>
-      {f.role !== "admin" && (
+      {!adminSel && (
         <div style={{ marginTop: 10 }}>
           <div className="card-t" style={{ marginBottom: 6 }}>Hotéis com acesso</div>
           {hotels.length === 0 ? <p className="hint">Crie um hotel primeiro para vincular o usuário.</p> : (
@@ -1249,7 +1271,7 @@ function UserForm({ hotels, initial, onSave, onCancel }) {
           )}
         </div>
       )}
-      {f.role === "admin" && <p className="hint">Administradores têm acesso a todos os hotéis.</p>}
+      {adminSel && <p className="hint">Administradores têm acesso a todos os hotéis.</p>}
       <div className="row gap" style={{ marginTop: 12 }}>
         <button className="primary" disabled={!ok || busy} onClick={save}>{busy ? "Salvando…" : editing ? "Salvar" : "Criar usuário"}</button>
         {onCancel && <button className="ghost" onClick={onCancel}>Cancelar</button>}
@@ -1264,8 +1286,8 @@ function UsersScreen({ hotels, me, onBack, flash }) {
   const load = async () => { try { setUsers(await api.listUsers()); } catch (e) { flash(e.message); } };
   useEffect(() => { load(); }, []); // eslint-disable-line
   const editUser = editing && editing !== "new" ? (users || []).find((u) => u.id === editing) : null;
-  const create = async (f) => { try { await api.createUser({ name: f.name, login: f.login, password: f.pass, role: f.role, hotelIds: f.hotelIds }); setEditing(null); load(); } catch (e) { alert(e.message); } };
-  const update = async (id, f) => { try { await api.updateUser(id, { name: f.name, login: f.login, password: f.pass, role: f.role, hotelIds: f.hotelIds }); setEditing(null); load(); } catch (e) { alert(e.message); } };
+  const create = async (f) => { try { await api.createUser({ name: f.name, login: f.login, password: f.pass, roles: f.roles, hotelIds: f.hotelIds }); setEditing(null); load(); } catch (e) { alert(e.message); } };
+  const update = async (id, f) => { try { await api.updateUser(id, { name: f.name, login: f.login, password: f.pass, roles: f.roles, hotelIds: f.hotelIds }); setEditing(null); load(); } catch (e) { alert(e.message); } };
   const remove = async (id, name) => { if (window.confirm('Excluir o usuário "' + name + '"?')) { try { await api.deleteUser(id); load(); } catch (e) { alert(e.message); } } };
   return (
     <>
@@ -1280,7 +1302,7 @@ function UsersScreen({ hotels, me, onBack, flash }) {
         <div className="pdvitem" key={u.id}>
           <div className="grow">
             <div className="pdv-n">{u.name} {u.id === me.id && <span className="dim" style={{ fontSize: 11 }}>(você)</span>}</div>
-            <div className="pdv-h">{roleLabel(u.role)} · login: {u.login}{u.role !== "admin" ? " · " + (u.hotelIds || []).map((id) => (hotels.find((h) => h.id === id) || {}).name).filter(Boolean).join(", ") : " · todos os hotéis"}{u.mustChange ? " · (troca de senha pendente)" : ""}</div>
+            <div className="pdv-h">{rolesLabel(u)} · login: {u.login}{!isAdmin(u) ? " · " + (u.hotelIds || []).map((id) => (hotels.find((h) => h.id === id) || {}).name).filter(Boolean).join(", ") : " · todos os hotéis"}{u.mustChange ? " · (troca de senha pendente)" : ""}</div>
           </div>
           <button className="ghost" onClick={() => setEditing(u.id)}>editar</button>
           {u.id !== me.id && <button className="ghost danger" onClick={() => remove(u.id, u.name)}>excluir</button>}

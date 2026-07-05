@@ -18,8 +18,11 @@ const todayInput = () => new Date().toLocaleDateString("en-CA");
 const brDate = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
 const UNIDADES = ["UN", "CX", "PCT", "KG", "G", "L", "ML", "M", "M²", "M³", "PAR", "DZ", "RL", "FD", "GL", "LATA", "SC", "FR", "KIT"];
 const initials = (n) => (n || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-const roleLabel = (r) => (r === "admin" ? "Administrador" : r === "almoxarifado" ? "Almoxarifado" : "Atendente");
-const canStock = (u) => u && (u.role === "admin" || u.role === "almoxarifado");
+const ROLE_NAMES = { admin: "Administrador", gerente: "Gerente", supervisor: "Supervisor de A&B", almoxarifado: "Almoxarifado", atendente: "Atendente" };
+const rolesOfU = (u) => !u ? [] : (Array.isArray(u.roles) && u.roles.length ? u.roles : (u.role ? [u.role] : []));
+const roleLabel = (r) => ROLE_NAMES[r] || r;
+const rolesLabel = (u) => { const rs = rolesOfU(u); return rs.length ? rs.map((r) => ROLE_NAMES[r] || r).join(" · ") : "—"; };
+const canStock = (u) => rolesOfU(u).some((r) => r === "admin" || r === "almoxarifado");
 const canApprove = canStock;
 
 /* ---------------- ícones SVG (do sistema original) ---------------- */
@@ -1014,7 +1017,7 @@ export default function AlmoxModule({ user, hotel, onExit, onLogout, openHelp, i
           <button className="help-btn no-print" onClick={openHelp} title="Ajuda / suporte">?</button>
           <div className="user-chip">
             <div className="avatar">{initials(user.name)}</div>
-            <div><div className="uname">{user.name}</div><div className="urole">{roleLabel(user.role)}</div></div>
+            <div><div className="uname">{user.name}</div><div className="urole">{rolesLabel(user)}</div></div>
             <button className="icon-btn no-print" onClick={onExit} title={exitLabel || "Trocar módulo"}><Ic name="swap" /></button>
           </div>
         </header>

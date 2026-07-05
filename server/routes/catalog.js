@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, newId, nowISO } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
-import { userRow, userHasHotel, canManagePdvs } from "../helpers.js";
+import { userRow, userHasHotel, canManagePdvs, isAdmin } from "../helpers.js";
 
 const r = Router();
 r.use(authRequired);
@@ -11,7 +11,7 @@ r.get("/hotels", async (req, res, next) => {
   try {
     const user = await userRow(req.auth.id);
     const rows = await db.all("SELECT * FROM hotels ORDER BY name");
-    const list = user.role === "admin" ? rows : rows.filter((h) => user.hotelIds.includes(h.id));
+    const list = isAdmin(user) ? rows : rows.filter((h) => user.hotelIds.includes(h.id));
     res.json(list.map((h) => ({ id: h.id, name: h.name })));
   } catch (e) { next(e); }
 });
@@ -41,7 +41,7 @@ r.get("/pdvs", async (req, res, next) => {
     const result = [];
     for (const p of rows) {
       let pending = 0;
-      if (user.role === "admin" || user.role === "gerente") {
+      if (canManagePdvs(user)) {
         const c = await db.get("SELECT COUNT(*) AS n FROM days WHERE pdv_id = ? AND status = 'pending'", [p.id]);
         pending = Number(c.n);
       }
@@ -54,7 +54,7 @@ r.get("/pdvs", async (req, res, next) => {
 r.post("/pdvs", async (req, res, next) => {
   try {
     const user = await userRow(req.auth.id);
-    if (!canManagePdvs(user.role)) return res.status(403).json({ error: "Permissão insuficiente." });
+    if (!canManagePdvs(user)) return res.status(403).json({ error: "Permissão insuficiente." });
     const { hotelId, name } = req.body || {};
     if (!hotelId || !name || !name.trim()) return res.status(400).json({ error: "Dados incompletos." });
     if (!userHasHotel(user, hotelId)) return res.status(403).json({ error: "Sem acesso a este hotel." });
