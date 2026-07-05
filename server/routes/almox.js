@@ -168,25 +168,38 @@ r.post("/:hid/itens/import", hotelGuard, needStock, async (req, res, next) => {
   try {
     const rows = Array.isArray(req.body && req.body.itens) ? req.body.itens : [];
     if (!rows.length) return res.status(400).json({ error: "Nenhum item na planilha." });
-    let added = 0, updated = 0;
+    let added = 0, updated = 0, categoriasCriadas = 0;
     await db.tx(async () => {
       const existing = await db.all("SELECT * FROM almox_itens WHERE hotel_id = ?", [req.hotel.id]);
       const byCode = new Map(existing.map((i) => [String(i.codigo).trim().toLowerCase(), i]));
       const byDesc = new Map(existing.map((i) => [String(i.descricao).trim().toLowerCase(), i]));
+      const cats = await db.all("SELECT id, nome FROM almox_categorias WHERE hotel_id = ?", [req.hotel.id]);
+      const catByName = new Map(cats.map((c) => [String(c.nome).trim().toLowerCase(), c.id]));
+      const resolveCat = async (nome) => {
+        const n = String(nome || "").trim();
+        if (!n) return null;
+        const key = n.toLowerCase();
+        if (catByName.has(key)) return catByName.get(key);
+        const cid = newId();
+        await db.run("INSERT INTO almox_categorias (id,hotel_id,nome) VALUES (?,?,?)", [cid, req.hotel.id, n]);
+        catByName.set(key, cid); categoriasCriadas++;
+        return cid;
+      };
       for (const it of rows) {
         const codigo = String(it.codigo || "").trim();
         const descricao = String(it.descricao || "").trim();
         if (!descricao) continue;
+        const catId = await resolveCat(it.categoria);
         const found = (codigo && byCode.get(codigo.toLowerCase())) || byDesc.get(descricao.toLowerCase());
         if (found) {
-          await db.run("UPDATE almox_itens SET descricao=?, unidade=?, estoque_minimo=? WHERE id=?",
-            [descricao, it.unidade || found.unidade, Number(it.estoqueMinimo || found.estoque_minimo || 0), found.id]);
+          await db.run("UPDATE almox_itens SET descricao=?, unidade=?, estoque_minimo=?, categoria_id=COALESCE(?, categoria_id) WHERE id=?",
+            [descricao, it.unidade || found.unidade, Number(it.estoqueMinimo || found.estoque_minimo || 0), catId, found.id]);
           updated++;
         } else {
           const id = newId();
           const cod = codigo || ("IT" + String(existing.length + added + 1).padStart(4, "0"));
           await db.run(`INSERT INTO almox_itens (id,hotel_id,codigo,descricao,unidade,categoria_id,localizacao,estoque_atual,estoque_minimo,custo_medio,ativo,criado_em)
-            VALUES (?,?,?,?,?,NULL,'',0,?,0,1,?)`, [id, req.hotel.id, cod, descricao, it.unidade || "UN", Number(it.estoqueMinimo || 0), nowISO()]);
+            VALUES (?,?,?,?,?,?,'',0,?,0,1,?)`, [id, req.hotel.id, cod, descricao, it.unidade || "UN", catId, Number(it.estoqueMinimo || 0), nowISO()]);
           if (Number(it.estoqueAtual || 0) > 0) {
             await registrarMovimento(req.hotel.id, { itemId: id, tipo: "entrada", quantidade: Number(it.estoqueAtual), custoUnitario: Number(it.custo || 0),
               documento: "Estoque inicial", origem: "Importação de planilha", usuario: req.user.login });
@@ -195,7 +208,7 @@ r.post("/:hid/itens/import", hotelGuard, needStock, async (req, res, next) => {
         }
       }
     });
-    res.json({ added, updated });
+    res.json({ added, updated, categoriasCriadas });
   } catch (e) { next(e); }
 });
 r.put("/:hid/itens/:id", hotelGuard, needStock, async (req, res, next) => {

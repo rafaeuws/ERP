@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from "react";
 import { almox } from "./api.js";
 import { ALMOX_CSS } from "./almoxCss.js";
 import * as XLSX from "xlsx";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 
 /* ============================================================
    MÓDULO ALMOXARIFADO (ERP) — layout ORIGINAL do Almoxarifado Cloud
@@ -225,10 +227,10 @@ function Itens({ hotel, user, flash }) {
     return Number(t);
   };
   const baixarModelo = () => {
-    const aoa = [["Código", "Descrição", "Unidade", "Estoque mínimo", "Estoque inicial", "Custo unitário (R$)"],
-      ["CN001", "Caneta esferográfica azul", "UN", 50, 200, 1.2], ["DT001", "Detergente neutro 5L", "GL", 4, 10, 18.9]];
+    const aoa = [["Código", "Descrição", "Unidade", "Categoria", "Estoque mínimo", "Estoque inicial", "Custo unitário (R$)"],
+      ["CN001", "Caneta esferográfica azul", "UN", "Papelaria", 50, 200, 1.2], ["DT001", "Detergente neutro 5L", "GL", "Limpeza", 4, 10, 18.9]];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 10 }, { wch: 36 }, { wch: 9 }, { wch: 14 }, { wch: 14 }, { wch: 16 }];
+    ws["!cols"] = [{ wch: 10 }, { wch: 36 }, { wch: 9 }, { wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 16 }];
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Itens");
     XLSX.writeFile(wb, "modelo-itens-almoxarifado.xlsx");
   };
@@ -243,14 +245,15 @@ function Itens({ hotel, user, flash }) {
         const codigo = (r && r[0] != null ? String(r[0]) : "").trim();
         const descricao = (r && r[1] != null ? String(r[1]) : "").trim();
         if (!descricao) return;
-        const min = toNum(r[3]), ini = toNum(r[4]), custo = toNum(r[5]);
+        const categoria = (r[3] != null ? String(r[3]) : "").trim();
+        const min = toNum(r[4]), ini = toNum(r[5]), custo = toNum(r[6]);
         if (i === 0 && Number.isNaN(min) && Number.isNaN(ini)) return;
-        parsed.push({ codigo, descricao, unidade: (r[2] != null ? String(r[2]).trim().toUpperCase() : "") || "UN",
+        parsed.push({ codigo, descricao, unidade: (r[2] != null ? String(r[2]).trim().toUpperCase() : "") || "UN", categoria,
           estoqueMinimo: Number.isNaN(min) ? 0 : Math.max(0, min), estoqueAtual: Number.isNaN(ini) ? 0 : Math.max(0, ini), custo: Number.isNaN(custo) ? 0 : Math.max(0, custo) });
       });
-      if (!parsed.length) { alert("Não encontrei itens na planilha. Colunas: A código, B descrição, C unidade, D mínimo, E estoque inicial, F custo."); return; }
+      if (!parsed.length) { alert("Não encontrei itens na planilha. Colunas: A código, B descrição, C unidade, D categoria, E mínimo, F estoque inicial, G custo."); return; }
       const out = await almox.importarItens(hotel.id, parsed);
-      flash(`Importação: ${out.added} novo(s), ${out.updated} atualizado(s)`); load();
+      flash(`Importação: ${out.added} novo(s), ${out.updated} atualizado(s)` + (out.categoriasCriadas ? ` · ${out.categoriasCriadas} categoria(s) criada(s)` : "")); load();
     } catch (e) { alert("Não foi possível importar: " + (e.message || e)); }
     finally { setImporting(false); }
   };
@@ -271,7 +274,7 @@ function Itens({ hotel, user, flash }) {
         <div className="card">
           <div className="card-head"><Ic name="download" /><h3>Importar do Excel</h3></div>
           <div className="card-body">
-            <p className="t-sub" style={{ marginBottom: 12 }}>Planilha com <b>A</b> código, <b>B</b> descrição, <b>C</b> unidade, <b>D</b> estoque mínimo, <b>E</b> estoque inicial e <b>F</b> custo unitário. Itens já existentes são atualizados; os novos entram com o estoque inicial lançado no Kardex.</p>
+            <p className="t-sub" style={{ marginBottom: 12 }}>Planilha com <b>A</b> código, <b>B</b> descrição, <b>C</b> unidade, <b>D</b> categoria, <b>E</b> estoque mínimo, <b>F</b> estoque inicial e <b>G</b> custo unitário. A categoria é criada automaticamente se ainda não existir. Itens já existentes são atualizados; os novos entram com o estoque inicial lançado no Kardex.</p>
             <div className="row">
               <label className="btn primary filebtn">{importing ? "Importando…" : "Escolher planilha"}
                 <input type="file" accept=".xlsx,.xls,.csv" disabled={importing} onChange={(e) => { if (e.target.files && e.target.files[0]) importarExcel(e.target.files[0]); e.target.value = ""; }} />
@@ -854,85 +857,255 @@ function Kardex({ hotel, flash }) {
   );
 }
 
-/* ============ RELATÓRIOS ============ */
-function Relatorios({ hotel, flash }) {
+/* ---- utilitários de PDF (jsPDF + autotable), como na versão anterior ---- */
+const GREEN = [14, 92, 74];
+function pdfDoc(orient) { return new jsPDF({ orientation: orient || "portrait", unit: "mm", format: "a4" }); }
+function pdfHeader(doc, empresa, titulo, periodo, quem) {
+  const W = doc.internal.pageSize.getWidth();
+  doc.setFillColor(...GREEN); doc.rect(0, 0, W, 3, "F");
+  doc.setFont("helvetica", "bold"); doc.setFontSize(13); doc.setTextColor(...GREEN);
+  doc.text(empresa || "Almoxarifado", 14, 13);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.setTextColor(45, 45, 45);
+  doc.text(titulo, 14, 20);
+  doc.setFontSize(8); doc.setTextColor(120);
+  doc.text("Emitido em " + new Date().toLocaleString("pt-BR") + (quem ? " · " + quem : ""), 14, 25.5);
+  if (periodo) doc.text(periodo, W - 14, 25.5, { align: "right" });
+  doc.setDrawColor(205); doc.line(14, 28, W - 14, 28);
+}
+function pdfFooter(doc) {
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  doc.setFontSize(7); doc.setTextColor(150);
+  doc.text("Desenvolvido por Rafael Almeida · rafael.almeida@accor.com", 14, H - 7);
+  doc.text("Página " + doc.internal.getCurrentPageInfo().pageNumber, W - 14, H - 7, { align: "right" });
+}
+function pdfRun(doc, { empresa, titulo, head, body, file, periodo, quem, table }) {
+  autoTable(doc, Object.assign({
+    head: [head], body, startY: 33, margin: { top: 33, left: 14, right: 14, bottom: 14 },
+    styles: { fontSize: 8, cellPadding: 2, overflow: "linebreak", lineColor: [230, 235, 233], lineWidth: 0.1 },
+    headStyles: { fillColor: GREEN, textColor: 255, fontSize: 8, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [244, 247, 246] },
+    didDrawPage: () => { pdfHeader(doc, empresa, titulo, periodo, quem); pdfFooter(doc); },
+  }, table || {}));
+  doc.save((file || "relatorio") + "-" + new Date().toISOString().slice(0, 10) + ".pdf");
+}
+const colsRight = (idxs) => { const o = {}; idxs.forEach((i) => (o[i] = { halign: "right" })); return o; };
+const statusLabel = (i) => { const s = statusItem(i); return s === "zero" ? "Zerado" : s === "low" ? "Baixo" : "Normal"; };
+
+function ReportCard({ titulo, desc, onClick }) {
+  return (
+    <div className="report-card card" style={{ padding: 14, cursor: "pointer" }} onClick={onClick}>
+      <div className="row" style={{ gap: 8, marginBottom: 6 }}><Ic name="report" /><strong style={{ fontSize: 13.5 }}>{titulo}</strong></div>
+      <p className="t-sub" style={{ fontSize: 12, marginBottom: 11, lineHeight: 1.4 }}>{desc}</p>
+      <span className="btn sm primary" style={{ pointerEvents: "none" }}><Ic name="download" /> Gerar PDF</span>
+    </div>
+  );
+}
+
+/* ============ RELATÓRIOS (central em PDF + tela) ============ */
+function Relatorios({ hotel, user, flash }) {
   const [itens, setItens] = useState(null);
   const [reqs, setReqs] = useState([]);
-  const [rel, setRel] = useState("posicao");
+  const [cats, setCats] = useState([]);
+  const monthStart = () => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1).toLocaleDateString("en-CA"); };
+  const [de, setDe] = useState(monthStart());
+  const [ate, setAte] = useState(todayInput());
   useEffect(() => {
-    Promise.all([almox.itens(hotel.id), almox.requisicoes(hotel.id)]).then(([i, r]) => { setItens(i); setReqs(r); }).catch((e) => flash(e.message));
+    Promise.all([almox.itens(hotel.id), almox.requisicoes(hotel.id), almox.categorias(hotel.id)])
+      .then(([i, r, c]) => { setItens(i); setReqs(r); setCats(c); }).catch((e) => flash(e.message));
   }, [hotel.id]); // eslint-disable-line
   if (!itens) return <p className="t-sub">Carregando relatórios…</p>;
 
+  const empresa = hotel.name, quem = user && user.name;
+  const periodoStr = () => "Período: " + brDate(de) + " a " + brDate(ate);
   const valorTotal = itens.reduce((s, i) => s + i.estoqueAtual * (i.custoMedio || 0), 0);
-  const baixos = itens.filter((i) => i.ativo !== false && i.estoqueAtual <= i.estoqueMinimo);
+  const baixos = itens.filter((i) => i.ativo !== false && statusItem(i) !== "ok");
   const comValor = itens.filter((i) => i.estoqueAtual * (i.custoMedio || 0) > 0).map((i) => ({ it: i, val: i.estoqueAtual * (i.custoMedio || 0) })).sort((a, b) => b.val - a.val);
   const totalABC = comValor.reduce((s, x) => s + x.val, 0) || 1;
   const porSetor = {};
   reqs.filter((r) => r.status === "aprovada").forEach((r) => { const k = r.setor || "(sem setor)"; porSetor[k] = (porSetor[k] || 0) + (r.valor || 0); });
   const setores = Object.entries(porSetor).sort((a, b) => b[1] - a[1]);
-  const RELS = [["posicao", "Posição de estoque"], ["reposicao", "Itens para reposição"], ["abc", "Curva ABC"], ["setor", "Consumo por setor"]];
-  const titulo = (RELS.find(([k]) => k === rel) || [])[1];
+  const catName = (id) => (cats.find((c) => c.id === id) || {}).nome || "";
+
+  /* ---- PDFs ---- */
+  const pdfPosicao = () => {
+    if (!itens.length) return flash("Sem itens para o relatório.");
+    const items = itens.slice().sort((a, b) => a.descricao.localeCompare(b.descricao, "pt-BR"));
+    const body = items.map((it) => [it.codigo, it.descricao, it.unidade, fmtNum(it.estoqueAtual), fmtBRL(it.custoMedio), fmtBRL(it.estoqueAtual * (it.custoMedio || 0)), statusLabel(it)]);
+    body.push([{ content: "VALOR TOTAL EM ESTOQUE", colSpan: 5, styles: { halign: "right", fontStyle: "bold" } }, { content: fmtBRL(valorTotal), styles: { fontStyle: "bold", halign: "right" } }, ""]);
+    pdfRun(pdfDoc("portrait"), { empresa, quem, titulo: "Posição de Estoque", head: ["Código", "Descrição", "Un.", "Saldo", "Custo médio", "Valor", "Status"], body, file: "posicao-estoque", table: { columnStyles: colsRight([3, 4, 5]) } });
+    flash("PDF gerado.");
+  };
+  const pdfReposicao = () => {
+    if (!baixos.length) return flash("Nenhum item no ponto de reposição.");
+    const body = baixos.map((it) => { const sug = Math.max(0, it.estoqueMinimo * 2 - it.estoqueAtual); return [it.codigo, it.descricao, it.unidade, fmtNum(it.estoqueAtual), fmtNum(it.estoqueMinimo), fmtNum(sug), statusLabel(it)]; });
+    pdfRun(pdfDoc("portrait"), { empresa, quem, titulo: "Itens para Reposição", head: ["Código", "Descrição", "Un.", "Atual", "Mínimo", "Sugestão", "Status"], body, file: "reposicao", table: { columnStyles: colsRight([3, 4, 5]) } });
+    flash("PDF gerado.");
+  };
+  const pdfCurvaABC = () => {
+    if (!comValor.length) return flash("Sem valor de estoque para classificar.");
+    let acum = 0;
+    const body = comValor.map((x) => { acum += x.val; const pAc = (acum / totalABC) * 100; const cls = pAc <= 80 ? "A" : pAc <= 95 ? "B" : "C"; return [cls, x.it.codigo, x.it.descricao, fmtBRL(x.val), ((x.val / totalABC) * 100).toFixed(1) + "%", pAc.toFixed(1) + "%"]; });
+    pdfRun(pdfDoc("portrait"), { empresa, quem, titulo: "Curva ABC de Estoque", head: ["Classe", "Código", "Descrição", "Valor", "% total", "% acum."], body, file: "curva-abc",
+      table: { columnStyles: Object.assign(colsRight([3, 4, 5]), { 0: { halign: "center", fontStyle: "bold" } }),
+        didParseCell: (d) => { if (d.section === "body" && d.column.index === 0) { const c = d.cell.raw; d.cell.styles.textColor = c === "A" ? [190, 58, 43] : c === "B" ? [185, 118, 8] : [27, 122, 61]; } } } });
+    flash("PDF gerado.");
+  };
+  const pdfMovimentacao = async () => {
+    try {
+      const mvs = await almox.movimentacoes(hotel.id, `?de=${de}&ate=${ate}`);
+      if (!mvs.length) return flash("Nenhuma movimentação no período.");
+      mvs.sort((a, b) => (a.data || "").localeCompare(b.data || "") || (a.id || "").localeCompare(b.id || ""));
+      let totEnt = 0, totSai = 0;
+      const body = mvs.map((m) => { const valor = m.quantidade * (m.custoUnitario || 0);
+        if (m.tipo === "entrada") totEnt += valor; if (m.tipo === "saida") totSai += valor;
+        const tl = m.tipo === "entrada" ? "Entrada" : m.tipo === "saida" ? "Saída" : "Ajuste";
+        const sinal = m.tipo === "saida" ? "−" : m.tipo === "entrada" ? "+" : "";
+        return [fmtDT(m.data), m.itemCodigo || "—", m.itemDescricao || "(removido)", tl, m.documento || "—", sinal + fmtNum(m.quantidade), fmtBRL(valor), fmtNum(m.saldoApos)]; });
+      body.push([{ content: "Totais do período", colSpan: 5, styles: { halign: "right", fontStyle: "bold" } }, "", { content: "Ent: " + fmtBRL(totEnt) + "  Saí: " + fmtBRL(totSai), colSpan: 2, styles: { fontStyle: "bold" } }]);
+      pdfRun(pdfDoc("landscape"), { empresa, quem, titulo: "Movimentação de Estoque", periodo: periodoStr(), head: ["Data", "Código", "Descrição", "Tipo", "Documento", "Qtde", "Valor", "Saldo"], body, file: "movimentacao", table: { columnStyles: colsRight([5, 6, 7]) } });
+      flash("PDF gerado.");
+    } catch (e) { flash(e.message); }
+  };
+  const pdfMapaES = async () => {
+    try {
+      const mvs = await almox.movimentacoes(hotel.id, `?de=${de}&ate=${ate}`);
+      const map = {};
+      mvs.forEach((m) => { const k = m.itemCodigo || "?"; if (!map[k]) map[k] = { desc: m.itemDescricao, un: m.unidade, entQ: 0, entV: 0, saiQ: 0, saiV: 0 };
+        const v = m.quantidade * (m.custoUnitario || 0);
+        if (m.tipo === "entrada") { map[k].entQ += m.quantidade; map[k].entV += v; } else if (m.tipo === "saida") { map[k].saiQ += m.quantidade; map[k].saiV += v; } });
+      const ks = Object.keys(map); if (!ks.length) return flash("Nenhuma entrada/saída no período.");
+      let tEntV = 0, tSaiV = 0;
+      const saldoDe = (cod) => { const it = itens.find((x) => x.codigo === cod); return it ? it.estoqueAtual : 0; };
+      const body = ks.sort((a, b) => (map[a].desc || "").localeCompare(map[b].desc || "", "pt-BR")).map((k) => { const d = map[k]; tEntV += d.entV; tSaiV += d.saiV;
+        return [k, d.desc || "", d.un || "", fmtNum(d.entQ), fmtBRL(d.entV), fmtNum(d.saiQ), fmtBRL(d.saiV), fmtNum(saldoDe(k))]; });
+      body.push([{ content: "Totais", colSpan: 4, styles: { halign: "right", fontStyle: "bold" } }, { content: fmtBRL(tEntV), styles: { fontStyle: "bold", halign: "right" } }, "", { content: fmtBRL(tSaiV), styles: { fontStyle: "bold", halign: "right" } }, ""]);
+      pdfRun(pdfDoc("landscape"), { empresa, quem, titulo: "Mapa de Entradas e Saídas", periodo: periodoStr(), head: ["Código", "Descrição", "Un.", "Qtd entradas", "R$ entradas", "Qtd saídas", "R$ saídas", "Saldo atual"], body, file: "mapa-entradas-saidas", table: { columnStyles: colsRight([3, 4, 5, 6, 7]) } });
+      flash("PDF gerado.");
+    } catch (e) { flash(e.message); }
+  };
+  const pdfConsumoSetor = () => {
+    const ag = {};
+    reqs.filter((r) => r.status === "aprovada" && (r.data || "").slice(0, 10) >= de && (r.data || "").slice(0, 10) <= ate).forEach((r) => { const k = r.setor || "(sem setor)";
+      if (!ag[k]) ag[k] = { reqs: 0, itens: 0, valor: 0 }; ag[k].reqs++; ag[k].itens += (r.qtdItens || 0); ag[k].valor += (r.valor || 0); });
+    const linhas = Object.entries(ag).sort((a, b) => b[1].valor - a[1].valor);
+    if (!linhas.length) return flash("Nenhuma requisição no período.");
+    let tot = 0;
+    const body = linhas.map(([s, d]) => { tot += d.valor; return [s, String(d.reqs), String(d.itens), fmtBRL(d.valor)]; });
+    body.push([{ content: "Total do período", colSpan: 3, styles: { halign: "right", fontStyle: "bold" } }, { content: fmtBRL(tot), styles: { fontStyle: "bold", halign: "right" } }]);
+    pdfRun(pdfDoc("portrait"), { empresa, quem, titulo: "Consumo por Setor / Centro de Custo", periodo: periodoStr(), head: ["Setor", "Nº requisições", "Itens", "Valor consumido"], body, file: "consumo-por-setor", table: { columnStyles: colsRight([1, 2, 3]) } });
+    flash("PDF gerado.");
+  };
+  const exportExcel = () => {
+    const aoa = [["Código", "Descrição", "Categoria", "Unidade", "Saldo", "Estoque Mínimo", "Custo Médio", "Valor em Estoque", "Status"]];
+    itens.slice().sort((a, b) => a.descricao.localeCompare(b.descricao, "pt-BR")).forEach((it) => aoa.push([it.codigo, it.descricao, catName(it.categoriaId), it.unidade, it.estoqueAtual, it.estoqueMinimo, it.custoMedio || 0, it.estoqueAtual * (it.custoMedio || 0), statusLabel(it)]));
+    const ws = XLSX.utils.aoa_to_sheet(aoa); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Estoque");
+    XLSX.writeFile(wb, `posicao-estoque-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    flash("Planilha exportada.");
+  };
 
   return (
     <div>
-      <div className="toolbar no-print">
-        <select className="filter" value={rel} onChange={(e) => setRel(e.target.value)} style={{ minWidth: 220 }}>{RELS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
-        <span className="spacer" />
-        <button className="btn" onClick={() => window.print()}><Ic name="print" /> Imprimir</button>
+      <div className="card" style={{ marginBottom: 18 }}>
+        <div className="card-head"><Ic name="report" /><h3>Central de relatórios (PDF)</h3><span className="spacer" />
+          <button className="btn sm no-print" onClick={() => window.print()}><Ic name="print" /> Imprimir tela</button>
+          <button className="btn sm no-print" onClick={exportExcel}><Ic name="download" /> Excel</button>
+        </div>
+        <div className="card-body">
+          <div className="row no-print" style={{ alignItems: "flex-end", marginBottom: 18, gap: 12, flexWrap: "wrap" }}>
+            <div className="field" style={{ margin: 0 }}><label>Período — de</label><input type="date" value={de} onChange={(e) => setDe(e.target.value)} /></div>
+            <div className="field" style={{ margin: 0 }}><label>até</label><input type="date" value={ate} onChange={(e) => setAte(e.target.value)} /></div>
+            <span className="t-sub" style={{ flex: 1, minWidth: 180 }}>O período se aplica aos relatórios de movimentação, mapa de entradas/saídas e consumo.</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(235px,1fr))", gap: 12 }}>
+            <ReportCard titulo="Posição de estoque" desc="Saldos, custo médio e valorização total do estoque." onClick={pdfPosicao} />
+            <ReportCard titulo="Curva ABC" desc="Classificação dos itens por concentração de valor (A/B/C)." onClick={pdfCurvaABC} />
+            <ReportCard titulo="Movimentação de estoque" desc="Entradas, saídas e ajustes do período, em ordem cronológica." onClick={pdfMovimentacao} />
+            <ReportCard titulo="Mapa de entradas e saídas" desc="Totais de entrada e saída por item no período." onClick={pdfMapaES} />
+            <ReportCard titulo="Itens para reposição" desc="Itens no/abaixo do mínimo com sugestão de compra." onClick={pdfReposicao} />
+            <ReportCard titulo="Consumo por setor" desc="Valor consumido por centro de custo via requisições." onClick={pdfConsumoSetor} />
+          </div>
+        </div>
       </div>
-      <div className="tbl-wrap print-zone">
-        <div className="print-head"><div className="print-mk">AX</div><div><b>{(titulo || "").toUpperCase()}</b> — {hotel.name}<div className="t-sub">Emitido em {new Date().toLocaleString("pt-BR")}</div></div></div>
 
-        {rel === "posicao" && (itens.length === 0 ? <div className="empty"><p>Sem itens cadastrados.</p></div> : (
-          <table>
-            <thead><tr><th>Código</th><th>Descrição</th><th>Un.</th><th className="r">Saldo</th><th className="r">Custo méd.</th><th className="r">Valor</th><th>Status</th></tr></thead>
-            <tbody>
-              {itens.slice().sort((a, b) => a.descricao.localeCompare(b.descricao, "pt-BR")).map((i) => (
-                <tr key={i.id}><td className="t-code">{i.codigo}</td><td className="t-desc">{i.descricao}</td><td className="t-sub">{i.unidade}</td>
-                  <td className="num">{fmtNum(i.estoqueAtual)}</td><td className="num t-sub">{fmtBRL(i.custoMedio)}</td><td className="num">{fmtBRL(i.estoqueAtual * (i.custoMedio || 0))}</td><td><PillItem i={i} /></td></tr>
-              ))}
-              <tr><td colSpan="5" className="num t-desc">Valor total</td><td className="num t-desc">{fmtBRL(valorTotal)}</td><td /></tr>
-            </tbody>
-          </table>
-        ))}
+      {/* Posição de estoque (tela) */}
+      <div className="card">
+        <div className="card-head"><Ic name="box" /><h3>Posição de estoque</h3><span className="spacer" /><span className="tag">{itens.length} itens · {fmtBRL(valorTotal)}</span></div>
+        {itens.length === 0 ? <div className="card-body t-sub">Sem itens cadastrados.</div> : (
+          <div className="tbl-wrap" style={{ border: "none" }}>
+            <table>
+              <thead><tr><th>Código</th><th>Descrição</th><th>Un.</th><th className="r">Saldo</th><th className="r">Custo méd.</th><th className="r">Valor</th><th>Status</th></tr></thead>
+              <tbody>
+                {itens.slice().sort((a, b) => a.descricao.localeCompare(b.descricao, "pt-BR")).map((i) => (
+                  <tr key={i.id}><td className="t-code">{i.codigo}</td><td className="t-desc">{i.descricao}</td><td className="t-sub">{i.unidade}</td>
+                    <td className="num">{fmtNum(i.estoqueAtual)}</td><td className="num t-sub">{fmtBRL(i.custoMedio)}</td><td className="num">{fmtBRL(i.estoqueAtual * (i.custoMedio || 0))}</td><td><PillItem i={i} /></td></tr>
+                ))}
+                <tr><td colSpan="5" className="num t-desc">Valor total em estoque</td><td className="num t-desc">{fmtBRL(valorTotal)}</td><td /></tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-        {rel === "reposicao" && (baixos.length === 0 ? <div className="empty"><Ic name="check" /><p>Nenhum item no ponto de reposição.</p></div> : (
-          <table>
-            <thead><tr><th>Código</th><th>Descrição</th><th className="r">Atual</th><th className="r">Mínimo</th><th className="r">Sugestão de compra</th></tr></thead>
-            <tbody>
-              {baixos.map((i) => (
-                <tr key={i.id}><td className="t-code">{i.codigo}</td><td className="t-desc">{i.descricao}</td>
-                  <td className="num">{fmtNum(i.estoqueAtual)} <span className="t-sub">{i.unidade}</span></td><td className="num t-sub">{fmtNum(i.estoqueMinimo)}</td>
-                  <td className="num"><span className="tag">{fmtNum(Math.max(0, i.estoqueMinimo * 2 - i.estoqueAtual))} {i.unidade}</span></td></tr>
-              ))}
-            </tbody>
-          </table>
-        ))}
+      {/* Itens para reposição (tela) */}
+      <div className="section-title">Itens para reposição</div>
+      <div className="card">
+        {baixos.length === 0 ? <div className="card-body t-sub">Nenhum item no ponto de reposição. 👍</div> : (
+          <div className="tbl-wrap" style={{ border: "none" }}>
+            <table>
+              <thead><tr><th>Código</th><th>Descrição</th><th className="r">Atual</th><th className="r">Mínimo</th><th className="r">Sugestão de compra</th></tr></thead>
+              <tbody>
+                {baixos.map((i) => (
+                  <tr key={i.id}><td className="t-code">{i.codigo}</td><td className="t-desc">{i.descricao}</td>
+                    <td className="num">{fmtNum(i.estoqueAtual)} <span className="t-sub">{i.unidade}</span></td><td className="num t-sub">{fmtNum(i.estoqueMinimo)}</td>
+                    <td className="num"><strong>{fmtNum(Math.max(0, i.estoqueMinimo * 2 - i.estoqueAtual))} {i.unidade}</strong></td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-        {rel === "abc" && (comValor.length === 0 ? <div className="empty"><p>Sem valor de estoque para classificar.</p></div> : (
-          <table>
-            <thead><tr><th>Classe</th><th>Código</th><th>Descrição</th><th className="r">Valor</th><th className="r">% total</th><th className="r">% acum.</th></tr></thead>
-            <tbody>
-              {(() => { let acum = 0; return comValor.map((x) => { acum += x.val; const pAc = (acum / totalABC) * 100; const cls = pAc <= 80 ? "A" : pAc <= 95 ? "B" : "C";
-                return (<tr key={x.it.id}><td><span className={"abc-" + cls}>{cls}</span></td><td className="t-code">{x.it.codigo}</td><td className="t-desc">{x.it.descricao}</td>
-                  <td className="num">{fmtBRL(x.val)}</td><td className="num t-sub">{((x.val / totalABC) * 100).toFixed(1)}%</td><td className="num t-sub">{pAc.toFixed(1)}%</td></tr>); }); })()}
-            </tbody>
-          </table>
-        ))}
-
-        {rel === "setor" && (setores.length === 0 ? <div className="empty"><p>Nenhuma requisição aprovada ainda.</p></div> : (
-          <div style={{ padding: 16 }}>
+      {/* Consumo por setor (tela) */}
+      <div className="section-title">Consumo por setor / centro de custo</div>
+      <div className="card">
+        {setores.length === 0 ? <div className="card-body t-sub">Nenhuma requisição registrada ainda.</div> : (
+          <div className="card-body">
             {setores.map(([s, v]) => (
               <div key={s} style={{ marginBottom: 12 }}>
-                <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}><span className="t-desc">{s}</span><span className="mono">{fmtBRL(v)}</span></div>
-                <div className="bar-track"><div className="bar-fill" style={{ width: Math.max(4, (v / setores[0][1]) * 100) + "%" }} /></div>
+                <div className="row" style={{ justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}><span>{s}</span><span className="num" style={{ fontWeight: 600 }}>{fmtBRL(v)}</span></div>
+                <div className="bar-track"><div className="bar-fill" style={{ width: (v / setores[0][1] * 100).toFixed(1) + "%", background: "var(--out)" }} /></div>
               </div>
             ))}
           </div>
-        ))}
+        )}
       </div>
-      <p className="t-sub no-print" style={{ marginTop: 10 }}>Sugestão de compra = 2× o mínimo. Na curva ABC, a classe A concentra até 80% do valor.</p>
+
+      {/* Curva ABC (tela) */}
+      <div className="section-title">Curva ABC — concentração de valor</div>
+      <div className="card">
+        {comValor.length === 0 ? <div className="card-body t-sub">Sem valor de estoque para classificar.</div> : (() => {
+          let acum = 0; const cnt = { A: 0, B: 0, C: 0 };
+          const linhas = comValor.map((x) => { acum += x.val; const pAc = (acum / totalABC) * 100; const cls = pAc <= 80 ? "A" : pAc <= 95 ? "B" : "C"; cnt[cls]++; return { x, pAc, cls }; });
+          return (<>
+            <div className="tbl-wrap" style={{ border: "none" }}>
+              <table>
+                <thead><tr><th>Classe</th><th>Código</th><th>Descrição</th><th className="r">Valor</th><th className="r">% do total</th><th className="r">% acumulado</th></tr></thead>
+                <tbody>
+                  {linhas.map(({ x, pAc, cls }) => (
+                    <tr key={x.it.id}><td><span className={"abc-" + cls}>{cls}</span></td><td className="t-code">{x.it.codigo}</td><td className="t-desc">{x.it.descricao}</td>
+                      <td className="num">{fmtBRL(x.val)}</td><td className="num t-sub">{((x.val / totalABC) * 100).toFixed(1)}%</td><td className="num t-sub">{pAc.toFixed(1)}%</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="card-body" style={{ borderTop: "1px solid var(--line)", display: "flex", gap: 26, flexWrap: "wrap" }}>
+              <div><span className="abc-A">Classe A</span> · {cnt.A} itens — maior valor (até 80%)</div>
+              <div><span className="abc-B">Classe B</span> · {cnt.B} itens</div>
+              <div><span className="abc-C">Classe C</span> · {cnt.C} itens — menor valor</div>
+            </div>
+          </>);
+        })()}
+      </div>
     </div>
   );
 }
@@ -1032,7 +1205,7 @@ export default function AlmoxModule({ user, hotel, onExit, onLogout, openHelp, i
           {page === "ajustes" && full && <Ajustes hotel={hotel} flash={flash} />}
           {page === "contagem" && full && <Contagem hotel={hotel} user={user} flash={flash} />}
           {page === "kardex" && <Kardex hotel={hotel} flash={flash} />}
-          {page === "relatorios" && full && <Relatorios hotel={hotel} flash={flash} />}
+          {page === "relatorios" && full && <Relatorios hotel={hotel} user={user} flash={flash} />}
         </main>
 
         <footer className="appfoot no-print">
